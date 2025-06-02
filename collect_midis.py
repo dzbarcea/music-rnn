@@ -10,8 +10,6 @@ def gather_midi_paths(root_dir="MIDIs"):
                 # Assumes structure: MIDIs/Genre/(OptionalSubgenre/)/Artist/song.mid
                 parts = full_path.split(os.sep)
                 # parts = ["MIDIs", "Genre", ... , "song.mid"]
-                if len(parts) < 3:
-                    continue
                 genre = parts[1]  # the folder immediately under MIDIs
                 examples.append((full_path, genre))
     return examples

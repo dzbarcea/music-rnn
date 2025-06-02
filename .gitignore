@@ -3,5 +3,6 @@
 
 # MIDI files (too large to store in git)
 /MIDIs
+/simplified_MIDIs
 
 *.pt

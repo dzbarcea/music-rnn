@@ -1,12 +1,14 @@
 import pretty_midi
+import os
 from collect_midis import gather_midi_paths
 
 def analyze_midi(path):
     """Returns the bass, melody, and chord instruments of a MIDI file."""
     pm = pretty_midi.PrettyMIDI(path)
-    print(f"Analyzing song: {path}")
-
     instruments = [inst for inst in pm.instruments if not inst.is_drum]
+
+    if len(instruments) == 1:
+        return { "melody": instruments[0] }
 
     # 1) First pass: gather raw stats per instrument
     stats = []
@@ -73,8 +75,8 @@ def analyze_midi(path):
         high_concurrency_score = norm_concurrency
         long_length_score = norm_avg_length
         chord_score = (
-                0.45 * high_concurrency_score +
-                0.45 * long_length_score +
+                0.5 * high_concurrency_score +
+                0.4 * long_length_score +
                 0.1 * norm_note_count
         )
 
@@ -99,18 +101,55 @@ def analyze_midi(path):
         })
 
     # 4) (Optional) Print out scores for inspection
-    for r in results:
-        inst = r["instrument"]
-        name = inst.name or f"Program {inst.program}"
-        print(f"Track: {name}")
-        print(f"  Bass score:   {r['bass_score']:.3f}")
-        print(f"  Chord score:  {r['chord_score']:.3f}")
-        print(f"  Melody score: {r['melody_score']:.3f}")
-        print(f"    Avg pitch: {r['avg_pitch']:.1f}, Concurrency: {r['concurrency']}, "
-              f"Avg length: {r['avg_length']:.3f}, Notes: {r['num_notes']}\n")
+    # for r in results:
+    #     inst = r["instrument"]
+    #     name = inst.name or f"Program {inst.program}"
+    #     print(f"Track: {name}")
+    #     print(f"  Bass score:   {r['bass_score']:.3f}")
+    #     print(f"  Chord score:  {r['chord_score']:.3f}")
+    #     print(f"  Melody score: {r['melody_score']:.3f}")
+    #     print(f"    Avg pitch: {r['avg_pitch']:.1f}, Concurrency: {r['concurrency']}, "
+    #           f"Avg length: {r['avg_length']:.3f}, Notes: {r['num_notes']}\n")
 
-    # 5) Select top instruments for each role
-    # Sort by descending score and pick the first non-overlapping choices.
+    # 5) Select top instruments for each role, handling fewer than 3 results
+    n = len(results)
+
+    # If there's only one instrument with notes, return it as melody
+    if n == 1:
+        return { "melody": results[0]["instrument"] }
+
+    # If there are exactly two instruments, pick the two highest-scoring roles across both
+    if n == 2:
+        # Build a flattened list of (instrument, role, score)
+        flattened = []
+        for r in results:
+            inst = r["instrument"]
+            flattened.append((inst, "bass",   r["bass_score"]))
+            flattened.append((inst, "melody", r["melody_score"]))
+            flattened.append((inst, "chords", r["chord_score"]))
+
+        # Sort by descending score
+        flattened.sort(key=lambda x: x[2], reverse=True)
+
+        assigned = {}
+        used_insts = set()
+        used_roles = set()
+
+        # Assign top two non-conflicting (instrument, role) pairs
+        for inst, role, score in flattened:
+            if inst not in used_insts and role not in used_roles:
+                assigned[role] = inst
+                used_insts.add(inst)
+                used_roles.add(role)
+                if len(assigned) == 2:
+                    break
+
+        return assigned
+
+    # Otherwise (3 or more), follow the original fixed-order logic:
+    #  - pick the highest-scoring bass
+    #  - then highest-scoring melody among the remaining
+    #  - then highest-scoring chord among the remaining
     sorted_for_bass = sorted(results, key=lambda x: x["bass_score"], reverse=True)
     bass_inst = sorted_for_bass[0]["instrument"]
 
@@ -130,9 +169,51 @@ def analyze_midi(path):
         "chords": chord_inst,
     }
 
-all_midis = gather_midi_paths()
-sample_path, _ = all_midis[9989]
-results = analyze_midi(sample_path)
-print(f"Bass: {results['bass']}"
-      f"\nMelody: {results['melody']}"
-      f"\nChords: {results['chords']}")
+
+def simplify_midis():
+    all_midis = gather_midi_paths()
+    for path, _ in all_midis:
+        try:
+            results = analyze_midi(path)
+        except Exception as e:
+            print(f"Error processing MIDI file '{path}': {e}")
+            continue
+
+        # Create a new MIDI file using the instruments
+        new_midi = pretty_midi.PrettyMIDI()
+
+        # Add the bass, melody, and chord instruments to the new MIDI file
+        bass_inst = results.get('bass')
+        if bass_inst:
+            bass_inst.program = 33
+            bass_inst.name = 'Bass'
+            new_midi.instruments.append(bass_inst)
+
+        melody_inst = results.get('melody')
+        if melody_inst:
+            melody_inst.program = 1
+            melody_inst.name = 'Melody'
+            new_midi.instruments.append(melody_inst)
+
+
+        chord_inst = results.get('chords')
+        if chord_inst:
+            chord_inst.program = 0
+            chord_inst.name = 'Chords'
+            new_midi.instruments.append(chord_inst)
+
+        # Write the new MIDI file to disk
+        # Get the genre (first directory after /MIDIs/) and filename
+        path_parts = path.split(os.sep)
+        genre = path_parts[1]
+        filename = path_parts[-1]
+
+        # Create the new output path
+        output_dir = os.path.join("simplified_MIDIs", genre)
+        os.makedirs(output_dir, exist_ok=True)
+        output_path = os.path.join(output_dir, filename)
+        new_midi.write(output_path)
+
+        print(f"New MIDI file created and saved as '{output_path}'")
+
+simplify_midis()
